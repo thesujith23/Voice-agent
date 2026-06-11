@@ -1,0 +1,5 @@
+node_modules/
+.env
+uploads/
+*.wav
+.DS_Store
