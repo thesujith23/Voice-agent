@@ -335,7 +335,7 @@ app.post('/api/voice-chat', upload.single('audio'), async (req, res) => {
             headers: { 'api-subscription-key': sarvamApiKey, ...sttForm.getHeaders() }
         });
 
-        const userText = sttResponse.data.transcript;
+        let userText = sttResponse.data.transcript;
         console.log("User said:", userText);
         fs.unlinkSync(audioPath);
 
