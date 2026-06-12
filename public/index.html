@@ -136,7 +136,7 @@
     let analyser;
     let silenceTimer = null;
     let animationFrameId = null;
-    const SILENCE_DELAY = 800; 
+    const SILENCE_DELAY = 2500; // Increased to 2.5 seconds so it doesn't cut off instantly
 
     function addMessage(text, isUser) {
         const msgDiv = document.createElement('div');
@@ -181,7 +181,7 @@
         let isSpeaking = false;
         for (let i = 0; i < dataArray.length; i++) {
             let amplitude = Math.abs(dataArray[i] - 128);
-            if (amplitude > 5) { // Threshold for speaking
+            if (amplitude > 3) { // Lowered threshold for speaking
                 isSpeaking = true;
                 break;
             }
