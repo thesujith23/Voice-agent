@@ -339,7 +339,9 @@ app.post('/api/voice-chat', upload.single('audio'), async (req, res) => {
         console.log("User said:", userText);
         fs.unlinkSync(audioPath);
 
-        if (!userText || userText.trim() === "") throw new Error("Could not understand audio");
+        if (!userText || userText.trim() === "") {
+            userText = "[Silence]";
+        }
 
         // 2. Groq LLM
         chatHistory.push({ role: "user", content: userText });
