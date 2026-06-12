@@ -24,6 +24,12 @@ if (!fs.existsSync(audioDir)) {
     fs.mkdirSync(audioDir, { recursive: true });
 }
 
+// Ensure uploads directory exists for multer
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
 // Configure multer to save uploaded audio to a temp file
 const upload = multer({ dest: 'uploads/' });
 
@@ -338,7 +344,10 @@ app.post('/api/voice-chat', upload.single('audio'), async (req, res) => {
         // 2. Groq LLM
         chatHistory.push({ role: "user", content: userText });
         console.log("Generating response...");
-        const aiText = await generateAIResponse(chatHistory);
+        let aiText = await generateAIResponse(chatHistory);
+        if (!aiText || aiText.trim() === "") {
+            aiText = "I'm sorry, I am having trouble processing that right now.";
+        }
         console.log("AI replied:", aiText);
         chatHistory.push({ role: "assistant", content: aiText });
 
@@ -453,6 +462,9 @@ app.post('/api/process-record', async (req, res) => {
             chatHistory.push({ role: "user", content: userText });
             console.log("Generating response...");
             aiText = await generateAIResponse(chatHistory);
+            if (!aiText || aiText.trim() === "") {
+                aiText = "I'm sorry, I am having trouble processing that right now.";
+            }
             chatHistory.push({ role: "assistant", content: aiText });
 
             // 4. Log to Supabase
