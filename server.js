@@ -18,6 +18,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Important for Plivo webhooks
 app.use(express.static('public'));
 
+const agentRoutes = require('./routes/agentRoutes');
+app.use('/api/agents', agentRoutes);
+
 // Ensure public/audio directory exists for Plivo to access TTS files
 const audioDir = path.join(__dirname, 'public', 'audio');
 if (!fs.existsSync(audioDir)) {
@@ -33,18 +36,10 @@ if (!fs.existsSync(uploadDir)) {
 // Configure multer to save uploaded audio to a temp file
 const upload = multer({ dest: 'uploads/' });
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const sarvamApiKey = process.env.SARVAM_API_KEY;
 
-// Supabase initialization
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-let supabase = null;
-if (supabaseUrl && supabaseKey && supabaseUrl !== 'your_supabase_url_here') {
-    supabase = createClient(supabaseUrl, supabaseKey);
-} else {
-    console.warn("Supabase credentials missing. Logging will be skipped.");
-}
+// Import AI Service (replaces inline Groq and Supabase initializations)
+const { generateAIResponse, supabase } = require('./services/aiService');
 
 // Read knowledge base
 let knowledgeBase = "";
@@ -75,194 +70,7 @@ let chatHistory = [
 ];
 let sessionId = Date.now().toString(); // Unique ID for this conversation
 
-const tools = [
-    {
-        type: "function",
-        function: {
-            name: "get_doctors",
-            description: "Fetch a list of available doctors from the database.",
-            parameters: { type: "object", properties: {}, required: [] }
-        }
-    },
-    {
-        type: "function",
-        function: {
-            name: "get_dates",
-            description: "Fetch available dates and slots for a specific doctor from the database.",
-            parameters: {
-                type: "object",
-                properties: { doctor_name: { type: "string", description: "The exact name of the doctor" } },
-                required: ["doctor_name"]
-            }
-        }
-    },
-    {
-        type: "function",
-        function: {
-            name: "get_slots",
-            description: "Fetch available time slots for a specific doctor and date from the database.",
-            parameters: {
-                type: "object",
-                properties: { 
-                    doctor_name: { type: "string", description: "The exact name of the doctor" },
-                    appointment_date: { type: "string", description: "The exact date of the appointment" } 
-                },
-                required: ["doctor_name", "appointment_date"]
-            }
-        }
-    },
-    {
-        type: "function",
-        function: {
-            name: "book_appointment",
-            description: "Book an appointment for a patient in the database.",
-            parameters: {
-                type: "object",
-                properties: {
-                    patient_name: { type: "string", description: "The name of the patient" },
-                    doctor_name: { type: "string", description: "The name of the doctor" },
-                    appointment_date: { type: "string", description: "The date of the appointment" },
-                    appointment_time: { type: "string", description: "The time slot of the appointment" }
-                },
-                required: ["patient_name", "doctor_name", "appointment_date", "appointment_time"]
-            }
-        }
-    }
-];
 
-async function executeTool(toolCall) {
-    const name = toolCall.function.name;
-    let args = {};
-    try {
-        args = JSON.parse(toolCall.function.arguments || '{}');
-    } catch (e) {
-        return JSON.stringify({ error: "Invalid arguments" });
-    }
-    
-    if (!supabase) return JSON.stringify({ error: "Supabase not configured" });
-
-    if (name === 'get_doctors') {
-        const { data, error } = await supabase.from('doctor_availability').select('doctor_name');
-        if (error) return JSON.stringify({ error: error.message });
-        const uniqueDoctors = [...new Set(data.map(d => d.doctor_name))];
-        return JSON.stringify({ doctors: uniqueDoctors });
-    }
-    if (name === 'get_dates') {
-        const { data, error } = await supabase.from('doctor_availability')
-            .select('date, available_slots')
-            .eq('doctor_name', args.doctor_name);
-        if (error) return JSON.stringify({ error: error.message });
-        return JSON.stringify({ dates: data });
-    }
-    if (name === 'get_slots') {
-        const { data, error } = await supabase.from('doctor_availability')
-            .select('available_slots')
-            .eq('doctor_name', args.doctor_name)
-            .eq('date', args.appointment_date);
-        if (error) return JSON.stringify({ error: error.message });
-        if (data && data.length > 0) {
-            return JSON.stringify({ available_slots: data[0].available_slots });
-        }
-        return JSON.stringify({ available_slots: [] });
-    }
-    if (name === 'book_appointment') {
-        try {
-            const apiUrl = `${process.env.SUPABASE_URL}/rest/v1/appointments`;
-            const apiKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-            
-            const response = await axios.post(apiUrl, {
-                patient_name: args.patient_name,
-                doctor_name: args.doctor_name,
-                appointment_date: args.appointment_date,
-                appointment_time: args.appointment_time,
-                status: 'confirmed'
-            }, {
-                headers: {
-                    'apikey': apiKey,
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                    'Prefer': 'return=representation'
-                }
-            });
-            
-            return JSON.stringify({ success: true, message: "Appointment booked successfully!", data: response.data });
-        } catch (error) {
-            const errorMessage = error.response ? error.response.data.message : error.message;
-            return JSON.stringify({ error: errorMessage });
-        }
-    }
-    return JSON.stringify({ error: "Unknown tool" });
-}
-
-async function generateAIResponse(history) {
-    let completion = await groq.chat.completions.create({
-        messages: history,
-        model: "llama-3.1-8b-instant",
-        temperature: 0.2,
-        max_tokens: 150,
-        tools: tools,
-        tool_choice: "auto"
-    });
-
-    let message = completion.choices[0].message;
-
-    // Handle standard API tool calls
-    if (message.tool_calls) {
-        history.push(message);
-        
-        for (const toolCall of message.tool_calls) {
-            console.log("Executing tool:", toolCall.function.name, toolCall.function.arguments);
-            const toolResult = await executeTool(toolCall);
-            console.log("Tool result:", toolResult);
-            history.push({
-                role: "tool",
-                tool_call_id: toolCall.id,
-                name: toolCall.function.name,
-                content: toolResult
-            });
-        }
-        
-        completion = await groq.chat.completions.create({
-            messages: history,
-            model: "llama-3.1-8b-instant",
-            temperature: 0.2,
-            max_tokens: 150
-        });
-        
-        message = completion.choices[0].message;
-    }
-    // Handle inline text tool calls (Llama 3 fallback)
-    else if (message.content && message.content.includes('<function=')) {
-        const match = message.content.match(/<function=([^>]+)>(.*?)<\/function>/s);
-        if (match) {
-            const funcName = match[1];
-            const funcArgs = match[2];
-            console.log("Executing inline tool:", funcName, funcArgs);
-            
-            history.push({ role: "assistant", content: message.content });
-            
-            const toolResult = await executeTool({ function: { name: funcName, arguments: funcArgs } });
-            console.log("Inline tool result:", toolResult);
-            
-            history.push({ role: "user", content: `Tool result: ${toolResult}\nPlease respond to the user based on this result. Do not output any more function tags.` });
-            
-            completion = await groq.chat.completions.create({
-                messages: history,
-                model: "llama-3.1-8b-instant",
-                temperature: 0.2,
-                max_tokens: 150
-            });
-            
-            message = completion.choices[0].message;
-        }
-    }
-    
-    // Clean any residual tags just in case
-    let finalContent = message.content || "";
-    finalContent = finalContent.replace(/<function=[^>]+>.*?<\/function>/gs, '').trim();
-    
-    return finalContent;
-}
 
 // Helper to generate TTS and save to public folder
 async function generateTTS(text, filename) {

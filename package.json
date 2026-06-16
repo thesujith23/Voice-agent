@@ -19,7 +19,10 @@
     "express": "^5.2.1",
     "form-data": "^4.0.5",
     "groq-sdk": "^1.2.1",
+    "livekit-client": "^2.19.2",
+    "livekit-server-sdk": "^2.15.4",
     "multer": "^2.1.1",
-    "plivo": "^4.77.1"
+    "plivo": "^4.77.1",
+    "ws": "^8.21.0"
   }
 }

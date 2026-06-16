@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice AI - Streaming</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f4f8; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        #status { font-size: 1.2rem; margin-bottom: 20px; font-weight: bold; color: #333; }
+        .orb { width: 100px; height: 100px; border-radius: 50%; background: #ccc; transition: all 0.3s ease; box-shadow: 0 0 20px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        .orb.idle { background: #4CAF50; box-shadow: 0 0 20px rgba(76, 175, 80, 0.5); }
+        .orb.listening { background: #FFC107; box-shadow: 0 0 20px rgba(255, 193, 7, 0.5); transform: scale(1.1); }
+        .orb.speaking { background: #2196F3; box-shadow: 0 0 20px rgba(33, 150, 243, 0.5); animation: pulse 1s infinite alternate; }
+        @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.1); } }
+        button { padding: 12px 24px; font-size: 1rem; cursor: pointer; border: none; border-radius: 8px; background: #333; color: white; transition: 0.2s; }
+        button:hover { background: #555; }
+        #chat { width: 80%; max-width: 600px; margin-top: 30px; height: 200px; overflow-y: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .msg { margin-bottom: 10px; }
+        .user { color: #555; text-align: right; }
+        .ai { color: #2196F3; text-align: left; }
+    </style>
+</head>
+<body>
+
+    <div id="status">Disconnected</div>
+    <div class="orb" id="orb"></div>
+    <button id="startBtn">Connect & Start Calling</button>
+    
+    <div id="chat"></div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+        const orb = document.getElementById('orb');
+        const startBtn = document.getElementById('startBtn');
+        const chat = document.getElementById('chat');
+
+        let ws;
+        let mediaRecorder;
+        let audioContext;
+        let currentAudioQueue = [];
+        let isPlaying = false;
+        let globalAudio = new Audio(); // Reusable audio element to bypass autoplay issues
+
+        async function init() {
+            try {
+                // 1. Get Session Info
+                const res = await fetch('http://localhost:3001/voice/session', { method: 'POST' });
+                const { wsUrl } = await res.json();
+
+                // 2. Connect WebSocket
+                ws = new WebSocket(wsUrl);
+                ws.binaryType = "blob";
+
+                ws.onopen = () => {
+                    statusEl.innerText = "Connected";
+                    setOrbState('idle');
+                    ws.send(JSON.stringify({ type: 'start' })); // Triggers Greeting
+                    startRecording();
+                };
+
+                ws.onmessage = async (event) => {
+                    if (typeof event.data === "string") {
+                        const data = JSON.parse(event.data);
+                        
+                        if (data.type === 'status') {
+                            statusEl.innerText = data.message;
+                            if (data.message === 'Speaking...') setOrbState('speaking');
+                            else if (data.message === 'Idle') setOrbState('idle');
+                            else setOrbState('listening'); // Processing/Thinking
+                        }
+                        else if (data.type === 'transcript') {
+                            addMsg(data.text, 'user');
+                        }
+                        else if (data.type === 'aiText') {
+                            addMsg(data.text, 'ai');
+                        }
+                        else if (data.type === 'audio') {
+                            // Queue incoming audio chunks for progressive playback
+                            currentAudioQueue.push(data.audio);
+                            playNextAudio();
+                        }
+                        else if (data.type === 'interrupt') {
+                            // Backend told us to stop playing audio
+                            currentAudioQueue = [];
+                            globalAudio.pause();
+                            isPlaying = false;
+                            setOrbState('idle');
+                        }
+                    }
+                };
+
+                ws.onclose = () => {
+                    statusEl.innerText = "Disconnected";
+                    setOrbState('');
+                    if (mediaRecorder) mediaRecorder.stop();
+                };
+
+            } catch (err) {
+                console.error("Connection failed", err);
+                statusEl.innerText = "Connection Failed";
+            }
+        }
+
+        async function startRecording() {
+            try {
+                // Request microphone with echo cancellation to prevent self-interruption
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
+                        // Continuously stream audio chunks to backend VAD
+                        ws.send(e.data);
+                    }
+                };
+
+                // Stream chunks every 250ms
+                mediaRecorder.start(250);
+            } catch (err) {
+                console.error("Mic Error:", err);
+                statusEl.innerText = "Microphone Access Denied";
+            }
+        }
+
+        async function playNextAudio() {
+            if (isPlaying || currentAudioQueue.length === 0) return;
+            
+            isPlaying = true;
+            const base64Audio = currentAudioQueue.shift();
+            
+            globalAudio.src = "data:audio/wav;base64," + base64Audio;
+            globalAudio.onended = () => {
+                isPlaying = false;
+                playNextAudio();
+            };
+            
+            try {
+                await globalAudio.play();
+            } catch (e) {
+                console.error("Autoplay blocked:", e);
+                isPlaying = false;
+                playNextAudio();
+            }
+        }
+
+        function setOrbState(state) {
+            orb.className = 'orb ' + state;
+        }
+
+        function addMsg(text, sender) {
+            const div = document.createElement('div');
+            div.className = 'msg ' + sender;
+            div.innerText = text;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        startBtn.addEventListener('click', () => {
+            // Play empty audio on click to unlock browser Autoplay policies
+            globalAudio.play().catch(()=>{}); 
+            startBtn.style.display = 'none';
+            init();
+        });
+
+    </script>
+</body>
+</html>

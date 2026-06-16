@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent Generator</title>
+    <style>
+        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { margin: 0; display: flex; height: 100vh; background-color: #f4f7f6; }
+        
+        /* Sidebar */
+        .sidebar { width: 250px; background: #2c3e50; color: white; display: flex; flex-direction: column; }
+        .sidebar h2 { padding: 20px; margin: 0; font-size: 1.2rem; border-bottom: 1px solid #34495e; }
+        .agent-list { flex: 1; overflow-y: auto; padding: 10px; }
+        .agent-item { padding: 10px; cursor: pointer; border-radius: 4px; margin-bottom: 5px; background: #34495e; transition: background 0.2s; }
+        .agent-item:hover, .agent-item.active { background: #3498db; }
+        
+        /* Main Content */
+        .main { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 20px; }
+        
+        /* Generator Panel */
+        .generator-panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .generator-panel input { width: 70%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        .btn { padding: 10px 20px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; transition: 0.2s; }
+        .btn:hover { background: #2980b9; }
+        .btn:disabled { background: #95a5a6; cursor: not-allowed; }
+
+        /* Split View for Agent Details & Playground */
+        .split-view { display: flex; gap: 20px; flex: 1; display: none; }
+        .split-view.active { display: flex; }
+        
+        .config-panel, .playground-panel { background: white; flex: 1; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; flex-direction: column;}
+        .config-panel h3, .playground-panel h3 { margin-top: 0; }
+        
+        .json-viewer { flex: 1; width: 100%; font-family: monospace; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical; }
+        
+        .chat-box { flex: 1; border: 1px solid #ccc; border-radius: 4px; padding: 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; background: #f9f9f9; }
+        .msg { padding: 8px 12px; border-radius: 12px; max-width: 80%; }
+        .msg.user { background: #3498db; color: white; align-self: flex-end; border-bottom-right-radius: 0; }
+        .msg.ai { background: #e0e0e0; color: #333; align-self: flex-start; border-bottom-left-radius: 0; }
+        .msg.system { background: transparent; color: #7f8c8d; align-self: center; font-size: 0.8rem; font-style: italic; }
+        
+        .chat-input-area { display: flex; gap: 10px; }
+        .chat-input-area input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        
+        #loading { display: none; margin-top: 10px; color: #e67e22; font-weight: bold; }
+        
+        .actions { margin-top: 10px; display: flex; gap: 10px; justify-content: flex-end;}
+        .btn-delete { background: #e74c3c; }
+        .btn-delete:hover { background: #c0392b; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>Saved Agents</h2>
+        <div class="agent-list" id="agentList">
+            <!-- Dynamically populated -->
+        </div>
+    </div>
+
+    <div class="main">
+        <h1>Voice Agent Generator</h1>
+        
+        <div class="generator-panel">
+            <h3>Generate New Agent</h3>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="promptInput" placeholder="e.g. Create a customer support agent for an e-commerce company">
+                <button class="btn" id="generateBtn" onclick="generateAgent()">Generate Magic</button>
+            </div>
+            <div id="loading">Generating agent configuration... Please wait...</div>
+        </div>
+
+        <div class="split-view" id="agentWorkspace">
+            <div class="config-panel">
+                <h3 id="currentAgentName">Agent Configuration</h3>
+                <textarea class="json-viewer" id="jsonViewer"></textarea>
+                <div class="actions">
+                    <button class="btn" onclick="saveConfiguration()">Save Changes</button>
+                    <button class="btn btn-delete" onclick="deleteAgent()">Delete</button>
+                </div>
+            </div>
+
+            <div class="playground-panel">
+                <h3>Testing Playground</h3>
+                <div class="chat-box" id="chatBox">
+                    <div class="msg system">Start chatting to test the agent's logic.</div>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" id="chatInput" placeholder="Type a message..." onkeypress="if(event.key === 'Enter') sendMessage()">
+                    <button class="btn" id="sendBtn" onclick="sendMessage()">Send</button>
+                    <button class="btn" id="callBtn" onclick="toggleCall()" style="background: #27ae60;" title="Start Hands-Free Call">📞 Call</button>
+                    <button class="btn" onclick="clearChat()" style="background: #95a5a6;" title="Refresh Chat">🔄</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentAgentId = null;
+        let chatHistory = [];
+
+        async function fetchAgents() {
+            const res = await fetch('/api/agents');
+            const agents = await res.json();
+            const list = document.getElementById('agentList');
+            list.innerHTML = '';
+            
+            agents.forEach(agent => {
+                const div = document.createElement('div');
+                div.className = `agent-item ${agent.id === currentAgentId ? 'active' : ''}`;
+                div.innerText = agent.agentName || agent.id;
+                div.onclick = () => loadAgent(agent.id);
+                list.appendChild(div);
+            });
+        }
+
+        async function generateAgent() {
+            const prompt = document.getElementById('promptInput').value;
+            if (!prompt) return alert('Enter a prompt first!');
+
+            document.getElementById('generateBtn').disabled = true;
+            document.getElementById('loading').style.display = 'block';
+
+            try {
+                const res = await fetch('/api/agents/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                
+                document.getElementById('promptInput').value = '';
+                await fetchAgents();
+                loadAgent(data.id);
+            } catch (err) {
+                alert('Generation failed: ' + err.message);
+            } finally {
+                document.getElementById('generateBtn').disabled = false;
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        async function loadAgent(id) {
+            currentAgentId = id;
+            chatHistory = []; // Reset chat history on new load
+            
+            const res = await fetch(`/api/agents/${id}`);
+            const agent = await res.json();
+            
+            document.getElementById('agentWorkspace').classList.add('active');
+            document.getElementById('currentAgentName').innerText = agent.agentName + " Configuration";
+            
+            const agentData = { ...agent };
+            delete agentData.id; // Hide ID from editor
+            document.getElementById('jsonViewer').value = JSON.stringify(agentData, null, 4);
+            
+            // Reset Chat UI
+            const chatBox = document.getElementById('chatBox');
+            chatBox.innerHTML = '<div class="msg system">Connected to ' + agent.agentName + ' playground.</div>';
+            
+            if (agent.greeting) {
+                addChatMessage(agent.greeting, 'ai');
+            }
+            
+            fetchAgents(); // Update active state in sidebar
+        }
+
+        async function saveConfiguration() {
+            if (!currentAgentId) return;
+            try {
+                const jsonStr = document.getElementById('jsonViewer').value;
+                const parsed = JSON.parse(jsonStr);
+                
+                const res = await fetch(`/api/agents/${currentAgentId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(parsed)
+                });
+                
+                if (res.ok) {
+                    alert('Configuration saved successfully!');
+                    fetchAgents();
+                } else {
+                    alert('Failed to save.');
+                }
+            } catch (e) {
+                alert('Invalid JSON! Please fix formatting before saving.');
+            }
+        }
+
+        async function deleteAgent() {
+            if (!currentAgentId) return;
+            if (!confirm("Are you sure you want to delete this agent?")) return;
+            
+            await fetch(`/api/agents/${currentAgentId}`, { method: 'DELETE' });
+            
+            currentAgentId = null;
+            document.getElementById('agentWorkspace').classList.remove('active');
+            fetchAgents();
+        }
+
+        async function sendMessage() {
+            if (!currentAgentId) return;
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            input.value = '';
+            addChatMessage(message, 'user');
+            
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            sendBtn.innerText = '...';
+
+            try {
+                const res = await fetch(`/api/agents/${currentAgentId}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message, history: chatHistory })
+                });
+                
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                
+                addChatMessage(data.response, 'ai');
+                chatHistory = data.history; // Update history with tool calls etc.
+            } catch (err) {
+                addChatMessage('Error: ' + err.message, 'system');
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.innerText = 'Send';
+            }
+        }
+
+        function clearChat() {
+            chatHistory = [];
+            document.getElementById('chatBox').innerHTML = '<div class="msg system">Chat cleared. Start a new conversation!</div>';
+            if (typeof isCalling !== 'undefined' && isCalling) stopCall();
+        }
+
+        function addChatMessage(text, sender) {
+            const chatBox = document.getElementById('chatBox');
+            const div = document.createElement('div');
+            div.className = `msg ${sender}`;
+            div.innerText = text;
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        // Hands-Free Call Logic (HTTP-Based)
+        let isCalling = false;
+        let callStream = null;
+        let callMediaRecorder = null;
+        let callAudioChunks = [];
+        let callAudio = new Audio();
+        let audioContext;
+        let analyser;
+        let silenceTimer;
+        let isUserSpeaking = false;
+
+        async function toggleCall() {
+            if (!currentAgentId) return alert('Please select or generate an agent first.');
+            
+            if (isCalling) {
+                stopCall();
+            } else {
+                startCall();
+            }
+        }
+
+        async function startCall() {
+            try {
+                isCalling = true;
+                document.getElementById('callBtn').innerText = '☎️ End Call';
+                document.getElementById('callBtn').style.background = '#e74c3c';
+
+                // Initial silent play to unlock browser autoplay restrictions
+                callAudio.play().catch(() => {});
+
+                callStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { echoCancellation: true, noiseSuppression: true } 
+                });
+                
+                // Set up AudioContext for client-side Silence Detection
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.minDecibels = -60;
+                const microphone = audioContext.createMediaStreamSource(callStream);
+                microphone.connect(analyser);
+
+                // Fetch initial greeting first
+                const res = await fetch(`/api/agents/${currentAgentId}/greeting`);
+                const data = await res.json();
+                
+                if (data.error) throw new Error(data.error);
+                
+                chatHistory = data.history;
+                addChatMessage(data.greetingText, 'ai');
+                
+                if (data.audioBase64) {
+                    callAudio.src = "data:audio/wav;base64," + data.audioBase64;
+                    
+                    const speakingDiv = document.createElement('div');
+                    speakingDiv.className = 'msg system temp-msg';
+                    speakingDiv.innerText = 'AI is speaking...';
+                    const chatBox = document.getElementById('chatBox');
+                    chatBox.appendChild(speakingDiv);
+                    chatBox.scrollTop = chatBox.scrollHeight;
+
+                    callAudio.onended = () => {
+                        document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+                        if (isCalling) startListeningTurn();
+                    };
+                    await callAudio.play();
+                } else {
+                    if (isCalling) startListeningTurn();
+                }
+                
+            } catch (err) {
+                alert('Connection or Microphone error: ' + err.message);
+                stopCall();
+            }
+        }
+
+        function stopCall() {
+            isCalling = false;
+            if (callMediaRecorder && callMediaRecorder.state === 'recording') {
+                callMediaRecorder.stop();
+            }
+            if (callStream) {
+                callStream.getTracks().forEach(track => track.stop());
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+            callAudio.pause();
+            clearTimeout(silenceTimer);
+            
+            document.getElementById('callBtn').innerText = '📞 Call';
+            document.getElementById('callBtn').style.background = '#27ae60';
+            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+        }
+
+        function startListeningTurn() {
+            if (!isCalling) return;
+
+            callAudioChunks = [];
+            callMediaRecorder = new MediaRecorder(callStream, { mimeType: 'audio/webm' });
+            
+            callMediaRecorder.ondataavailable = e => {
+                if (e.data.size > 0) callAudioChunks.push(e.data);
+            };
+
+            callMediaRecorder.onstop = async () => {
+                if (!isCalling) return;
+                const audioBlob = new Blob(callAudioChunks, { type: 'audio/webm' });
+                await sendCallTurn(audioBlob);
+            };
+
+            callMediaRecorder.start();
+            isUserSpeaking = false;
+            
+            // If they are absolutely quiet for 10 seconds, end the turn to avoid huge files
+            clearTimeout(silenceTimer);
+            silenceTimer = setTimeout(() => {
+                if (!isUserSpeaking && callMediaRecorder.state === 'recording') {
+                    callMediaRecorder.stop();
+                }
+            }, 10000);
+
+            monitorSilence();
+            
+            // Show UI indicator
+            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+            const tempDiv = document.createElement('div');
+            tempDiv.className = 'msg system temp-msg';
+            tempDiv.innerText = 'Listening... (Speak now)';
+            const chatBox = document.getElementById('chatBox');
+            chatBox.appendChild(tempDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function monitorSilence() {
+            if (!isCalling || callMediaRecorder.state !== 'recording') return;
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+
+            let sum = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                sum += dataArray[i];
+            }
+            const averageVolume = sum / bufferLength;
+
+            if (averageVolume > 25) { // Threshold for speech (raised to ignore background noise/fans)
+                isUserSpeaking = true;
+                clearTimeout(silenceTimer);
+                
+                // Once speaking, wait for 1.2 seconds of silence to end the turn
+                silenceTimer = setTimeout(() => {
+                    if (callMediaRecorder.state === 'recording') {
+                        callMediaRecorder.stop();
+                    }
+                }, 1200);
+            }
+
+            requestAnimationFrame(monitorSilence);
+        }
+
+        async function sendCallTurn(audioBlob) {
+            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+
+            const tempDiv = document.createElement('div');
+            tempDiv.className = 'msg system temp-msg';
+            tempDiv.innerText = 'Thinking...';
+            const chatBox = document.getElementById('chatBox');
+            chatBox.appendChild(tempDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            try {
+                const formData = new FormData();
+                formData.append('audio', audioBlob);
+                formData.append('history', JSON.stringify(chatHistory));
+
+                const res = await fetch(`/api/agents/${currentAgentId}/voice-chat`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+
+                // Ignore if STT returns empty or silence bracket
+                const isSilence = !data.userText || data.userText.trim() === '' || data.userText.includes('[Silence]');
+
+                if (!isSilence) {
+                    addChatMessage(data.userText, 'user');
+                    addChatMessage(data.response, 'ai');
+                    chatHistory = data.history;
+
+                    if (data.audioBase64 && isCalling) {
+                        callAudio.src = "data:audio/wav;base64," + data.audioBase64;
+                        
+                        // Show "Speaking..." indicator
+                        const speakingDiv = document.createElement('div');
+                        speakingDiv.className = 'msg system temp-msg';
+                        speakingDiv.innerText = 'AI is speaking...';
+                        chatBox.appendChild(speakingDiv);
+                        chatBox.scrollTop = chatBox.scrollHeight;
+
+                        callAudio.onended = () => {
+                            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+                            if (isCalling) startListeningTurn();
+                        };
+                        await callAudio.play();
+                    } else {
+                        if (isCalling) startListeningTurn();
+                    }
+                } else {
+                    // It was just background noise, restart listening loop without changing history
+                    if (isCalling) startListeningTurn();
+                }
+
+            } catch (err) {
+                document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+                addChatMessage('Error: ' + err.message, 'system');
+                if (isCalling) setTimeout(() => startListeningTurn(), 2000); // Wait 2s and try again
+            }
+        }
+
+        // Initial Load
+        fetchAgents();
+    </script>
+</body>
+</html>
