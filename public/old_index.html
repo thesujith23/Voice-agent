@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice AI Agent</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .chat-container {
+            width: 100%;
+            max-width: 600px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 80vh;
+        }
+        .chat-header {
+            background: #2b6cb0;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            font-size: 1.2rem;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .clear-btn {
+            background: #e53e3e;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .clear-btn:hover { background: #c53030; }
+        .chat-box {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            background: #fafafa;
+        }
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.4;
+        }
+        .user-message {
+            background: #ebf8ff;
+            color: #2b6cb0;
+            align-self: flex-end;
+            border-bottom-right-radius: 2px;
+        }
+        .ai-message {
+            background: #edf2f7;
+            color: #2d3748;
+            align-self: flex-start;
+            border-bottom-left-radius: 2px;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+        }
+        .record-btn {
+            background: #48bb78;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            outline: none;
+        }
+        .record-btn:active, .record-btn.recording {
+            background: #e53e3e;
+            transform: scale(0.95);
+        }
+        .status {
+            text-align: center;
+            font-size: 0.9rem;
+            color: #718096;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="chat-container">
+    <div class="chat-header">
+        Voice AI Receptionist
+        <button class="clear-btn" onclick="clearChat()">Clear Chat</button>
+    </div>
+    <div class="chat-box" id="chat-box">
+        <div class="message ai-message">Click "Start Call" to begin speaking with me.</div>
+    </div>
+    <div style="background: white; padding-top: 10px;">
+        <div class="status" id="status-text">Ready to connect</div>
+        <div class="controls">
+            <button class="record-btn" id="record-btn">Start Call</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const chatBox = document.getElementById('chat-box');
+    const recordBtn = document.getElementById('record-btn');
+    const statusText = document.getElementById('status-text');
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let isRecording = false;
+    let isInCall = false;
+
+    let audioContext;
+    let analyser;
+    let silenceTimer = null;
+    let animationFrameId = null;
+    const SILENCE_DELAY = 2500; // Increased to 2.5 seconds so it doesn't cut off instantly
+
+    function addMessage(text, isUser) {
+        const msgDiv = document.createElement('div');
+        msgDiv.classList.add('message', isUser ? 'user-message' : 'ai-message');
+        msgDiv.textContent = text;
+        chatBox.appendChild(msgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function initAudio() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            source.connect(analyser);
+
+            mediaRecorder.ondataavailable = event => {
+                if (event.data.size > 0) audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                if (!isInCall) return;
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                audioChunks = [];
+                await sendAudioToServer(audioBlob);
+            };
+        } catch (err) {
+            console.error("Microphone access denied:", err);
+            statusText.textContent = "Error: Microphone access denied";
+        }
+    }
+
+    function detectSilence() {
+        if (!isRecording) return;
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteTimeDomainData(dataArray);
+
+        let isSpeaking = false;
+        for (let i = 0; i < dataArray.length; i++) {
+            let amplitude = Math.abs(dataArray[i] - 128);
+            if (amplitude > 3) { // Lowered threshold for speaking
+                isSpeaking = true;
+                break;
+            }
+        }
+
+        if (isSpeaking) {
+            if (silenceTimer) {
+                clearTimeout(silenceTimer);
+                silenceTimer = null;
+            }
+            statusText.textContent = "Listening...";
+        } else {
+            if (!silenceTimer) {
+                silenceTimer = setTimeout(() => {
+                    if (isRecording) {
+                        stopRecording();
+                    }
+                }, SILENCE_DELAY);
+            }
+        }
+
+        animationFrameId = requestAnimationFrame(detectSilence);
+    }
+
+    function startRecording() {
+        if (!mediaRecorder || isRecording || !isInCall) return;
+        audioChunks = [];
+        mediaRecorder.start();
+        isRecording = true;
+        statusText.textContent = "Listening... (Speak now)";
+        recordBtn.textContent = "End Call";
+        
+        if (audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+        detectSilence();
+    }
+
+    function stopRecording() {
+        if (!mediaRecorder || !isRecording) return;
+        isRecording = false;
+        mediaRecorder.stop();
+        if (silenceTimer) clearTimeout(silenceTimer);
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    }
+
+    async function sendAudioToServer(blob) {
+        statusText.textContent = "Processing... (Thinking)";
+        
+        const formData = new FormData();
+        formData.append('audio', blob, 'recording.webm');
+
+        try {
+            const response = await fetch('/api/voice-chat', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+            
+            if (data.error) {
+                statusText.textContent = "Error: " + data.error;
+                isInCall = false;
+                recordBtn.textContent = "Start Call";
+                return;
+            }
+
+            addMessage(data.userText, true);
+            addMessage(data.aiText, false);
+
+            if (data.audioBase64) {
+                playAudio("data:audio/wav;base64," + data.audioBase64);
+            } else {
+                startRecording(); // Fallback if no audio
+            }
+
+        } catch (error) {
+            console.error("Error sending audio:", error);
+            statusText.textContent = "Error: Failed to process request.";
+            isInCall = false;
+            recordBtn.textContent = "Start Call";
+        }
+    }
+
+    function playAudio(src) {
+        if (!isInCall) return;
+        const audio = new Audio(src);
+        statusText.textContent = "AI is speaking...";
+        audio.play();
+        audio.onended = () => {
+            if (isInCall) {
+                startRecording(); // Automatically start listening after AI finishes
+            }
+        };
+    }
+
+    async function startCall() {
+        if (!mediaRecorder) await initAudio();
+        
+        chatBox.innerHTML = '';
+        isInCall = true;
+        recordBtn.textContent = "Connecting...";
+        recordBtn.classList.add('recording'); // Just to style it active
+        statusText.textContent = "Starting call...";
+
+        try {
+            const response = await fetch('/api/start-call', { method: 'POST' });
+            const data = await response.json();
+            
+            addMessage(data.aiText, false);
+            if (data.audioBase64) {
+                playAudio("data:audio/wav;base64," + data.audioBase64);
+                recordBtn.textContent = "End Call";
+            }
+        } catch (error) {
+            console.error("Error starting call:", error);
+            statusText.textContent = "Failed to start call";
+            isInCall = false;
+            recordBtn.textContent = "Start Call";
+            recordBtn.classList.remove('recording');
+        }
+    }
+
+    function endCall() {
+        isInCall = false;
+        if (isRecording) {
+            stopRecording();
+        }
+        recordBtn.textContent = "Start Call";
+        recordBtn.classList.remove('recording');
+        statusText.textContent = "Call ended.";
+    }
+
+    recordBtn.addEventListener('click', () => {
+        if (isInCall) {
+            endCall();
+        } else {
+            startCall();
+        }
+    });
+
+    async function clearChat() {
+        try {
+            endCall();
+            await fetch('/api/clear', { method: 'POST' });
+            chatBox.innerHTML = '<div class="message ai-message">Click "Start Call" to begin.</div>';
+        } catch (error) {
+            console.error("Error clearing chat:", error);
+        }
+    }
+
+    // Initialize audio context lazily on user interaction instead of onload
+    // to comply with browser autoplay policies.
+</script>
+
+</body>
+</html>
