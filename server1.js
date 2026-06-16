@@ -45,7 +45,6 @@ CRITICAL RULES FOR CONVERSATION:
 4. DO NOT use formatting, bullet points, emojis, asterisks, or special characters. Use plain text only.
 5. Check doctor availability using your tools if the user asks for appointments.
 6. Always check the knowledge base before answering.
-7. IMPORTANT: When the conversation is completely finished (e.g., after booking is done or the patient says goodbye), output the exact text "[END_CALL]" at the very end of your message so the system knows to hang up properly.
 
 --- Knowledge Base ---
 ${knowledgeBase}
@@ -79,9 +78,9 @@ const tools = [
             description: "Fetch available time slots for a specific doctor and date from the database.",
             parameters: {
                 type: "object",
-                properties: { 
+                properties: {
                     doctor_name: { type: "string", description: "The exact name of the doctor" },
-                    appointment_date: { type: "string", description: "The exact date of the appointment" } 
+                    appointment_date: { type: "string", description: "The exact date of the appointment" }
                 },
                 required: ["doctor_name", "appointment_date"]
             }
@@ -114,7 +113,7 @@ async function executeTool(toolCall) {
     } catch (e) {
         return JSON.stringify({ error: "Invalid arguments" });
     }
-    
+
     if (!supabase) return JSON.stringify({ error: "Supabase not configured" });
 
     if (name === 'get_doctors') {
@@ -145,7 +144,7 @@ async function executeTool(toolCall) {
         try {
             const apiUrl = `${process.env.SUPABASE_URL}/rest/v1/appointments`;
             const apiKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-            
+
             const response = await axios.post(apiUrl, {
                 patient_name: args.patient_name,
                 doctor_name: args.doctor_name,
@@ -180,7 +179,7 @@ class STTProvider {
 class SarvamSTTProvider extends STTProvider {
     async transcribe(audioBuffer) {
         if (!audioBuffer || audioBuffer.length === 0) return "[Silence]";
-        
+
         try {
             const form = new FormData();
             form.append('file', audioBuffer, { filename: 'audio.webm' });
@@ -189,7 +188,7 @@ class SarvamSTTProvider extends STTProvider {
             const response = await axios.post('https://api.sarvam.ai/speech-to-text-translate', form, {
                 headers: { 'api-subscription-key': sarvamApiKey, ...form.getHeaders() }
             });
-            
+
             return response.data.transcript || "[Silence]";
         } catch (error) {
             console.error("STT Error:", error.response ? error.response.data : error.message);
@@ -249,7 +248,7 @@ class ConversationManager {
 
     async generateAIResponse(userText) {
         this.chatHistory.push({ role: "user", content: userText });
-        
+
         let completion = await groq.chat.completions.create({
             messages: this.chatHistory,
             model: "llama-3.1-8b-instant",
@@ -263,7 +262,7 @@ class ConversationManager {
 
         if (message.tool_calls) {
             this.chatHistory.push(message);
-            
+
             for (const toolCall of message.tool_calls) {
                 console.log("Executing tool:", toolCall.function.name);
                 const toolResult = await executeTool(toolCall);
@@ -274,7 +273,7 @@ class ConversationManager {
                     content: toolResult
                 });
             }
-            
+
             completion = await groq.chat.completions.create({
                 messages: this.chatHistory,
                 model: "llama-3.1-8b-instant",
@@ -289,10 +288,10 @@ class ConversationManager {
                 const funcName = match[1];
                 const funcArgs = match[2];
                 this.chatHistory.push({ role: "assistant", content: message.content });
-                
+
                 const toolResult = await executeTool({ function: { name: funcName, arguments: funcArgs } });
                 this.chatHistory.push({ role: "user", content: `Tool result: ${toolResult}\nPlease respond to the user based on this result. Do not output any more function tags.` });
-                
+
                 completion = await groq.chat.completions.create({
                     messages: this.chatHistory,
                     model: "llama-3.1-8b-instant",
@@ -317,68 +316,34 @@ class VoiceActivityDetector {
         this.silenceTimer = null;
         this.isSpeaking = false;
         this.audioBuffer = [];
-        this.webmHeader = null;
-        this.loudChunkCount = 0;
     }
 
     processAudioChunk(chunk) {
-        if (!this.webmHeader && chunk.length > 0) {
-            this.webmHeader = chunk;
-        }
-
+        // We append all audio to the buffer so we don't lose pre-roll
         this.audioBuffer.push(chunk);
-        const isLoud = chunk.length >= 1500;
 
-        if (isLoud) {
-            if (!this.isSpeaking) {
-                this.isSpeaking = true;
-                this.loudChunkCount = 0;
-                this.onSpeechStart();
-            }
-            
-            this.loudChunkCount++;
-            clearTimeout(this.silenceTimer);
-            
-            // Dynamic Silence Detection
-            // If they spoke less (e.g. < 4 loud chunks ~ 1 sec), wait shorter (1000ms).
-            // If they spoke more, they might be pausing to think, so wait longer (2500ms).
-            let currentThreshold = this.silenceThreshold;
-            if (this.loudChunkCount > 6) {
-                currentThreshold = 2500;
-            } else {
-                currentThreshold = 1000;
-            }
-
-            this.silenceTimer = setTimeout(() => {
-                this.isSpeaking = false;
-                
-                let bufferToCompile = this.audioBuffer;
-                if (this.webmHeader && this.audioBuffer.length > 0 && this.audioBuffer[0] !== this.webmHeader) {
-                    bufferToCompile = [this.webmHeader, ...this.audioBuffer];
-                }
-                
-                const fullBuffer = Buffer.concat(bufferToCompile);
-                this.audioBuffer = []; // Clear for next turn
-                this.loudChunkCount = 0;
-                this.onSpeechEnd(fullBuffer);
-            }, currentThreshold);
-
-        } else {
-            // It's a quiet chunk.
-            if (!this.isSpeaking) {
-                // Keep a rolling buffer of ~4 chunks (1 sec) to prevent memory leaks and keep pre-roll
-                if (this.audioBuffer.length > 4) {
-                    this.audioBuffer.shift(); 
-                }
-            }
+        // WebM Noise Gate: A 250ms silent/static WebM chunk is usually < 800 bytes.
+        // If you are using laptop speakers, the echo-cancellation might leak a bit of audio 
+        // into the mic, creating a ~1000 byte chunk. Actual speech is usually 1.5KB+.
+        if (chunk.length >= 1500 && !this.isSpeaking) {
+            this.isSpeaking = true;
+            this.onSpeechStart();
         }
+
+        // Reset silence timer
+        clearTimeout(this.silenceTimer);
+        this.silenceTimer = setTimeout(() => {
+            this.isSpeaking = false;
+            const fullBuffer = Buffer.concat(this.audioBuffer);
+            this.audioBuffer = []; // Clear for next turn
+            this.onSpeechEnd(fullBuffer);
+        }, this.silenceThreshold);
     }
-    
+
     reset() {
         clearTimeout(this.silenceTimer);
         this.isSpeaking = false;
         this.audioBuffer = [];
-        this.loudChunkCount = 0;
     }
 }
 
@@ -389,7 +354,7 @@ class VoiceSessionManager {
         this.conversation = new ConversationManager();
         this.stt = new SarvamSTTProvider();
         this.tts = new SarvamTTSProvider();
-        
+
         this.isAISpeaking = false;
         this.abortController = null; // Used to cancel TTS generation if interrupted
         this.interrupted = false;
@@ -401,7 +366,7 @@ class VoiceSessionManager {
 
         this.ws.on('message', (msg, isBinary) => this.handleMessage(msg, isBinary));
         this.ws.on('close', () => this.handleClose());
-        
+
         console.log(`[Session ${this.sessionId}] Connected`);
     }
 
@@ -415,7 +380,7 @@ class VoiceSessionManager {
                     // Start of call, optionally send a greeting
                     this.sendGreeting();
                 }
-            } catch(e) {
+            } catch (e) {
                 console.error("Invalid JSON from client");
             }
         }
@@ -441,7 +406,7 @@ class VoiceSessionManager {
     async handleSpeechEnd(audioBuffer) {
         console.log(`[Session ${this.sessionId}] User stopped speaking. Processing...`);
         this.interrupted = false;
-        
+
         if (audioBuffer.length < 250) {
             console.log(`[Session ${this.sessionId}] Audio too short (${audioBuffer.length} bytes), ignoring.`);
             this.ws.send(JSON.stringify({ type: 'status', message: 'Idle' }));
@@ -464,27 +429,14 @@ class VoiceSessionManager {
             if (this.interrupted) return;
 
             this.ws.send(JSON.stringify({ type: 'status', message: 'Thinking...' }));
-            let aiText = await this.conversation.generateAIResponse(userText);
-            
+            const aiText = await this.conversation.generateAIResponse(userText);
+
             if (this.interrupted) return;
 
             SupabaseLogger.log(this.sessionId, userText, aiText);
 
-            let shouldEndCall = false;
-            if (aiText.includes('[END_CALL]')) {
-                shouldEndCall = true;
-                aiText = aiText.replace('[END_CALL]', '').trim();
-            }
-
             // Progressive TTS generation
-            if (aiText.length > 0) {
-                await this.streamTTS(aiText);
-            }
-
-            if (shouldEndCall) {
-                this.ws.send(JSON.stringify({ type: 'status', message: 'Call Ended' }));
-                this.ws.close();
-            }
+            await this.streamTTS(aiText);
 
         } catch (error) {
             console.error(`[Session ${this.sessionId}] Error processing turn:`, error);
@@ -502,7 +454,7 @@ class VoiceSessionManager {
 
         // Progressive playback: Split by sentences
         const sentences = aiText.match(/[^.!?]+[.!?]+/g) || [aiText];
-        
+
         for (const sentence of sentences) {
             if (signal.aborted || this.interrupted) break;
             if (sentence.trim().length === 0) continue;
@@ -510,14 +462,14 @@ class VoiceSessionManager {
             try {
                 const base64Audio = await this.tts.synthesize(sentence.trim());
                 if (signal.aborted || this.interrupted) break;
-                
+
                 this.ws.send(JSON.stringify({ type: 'audio', audio: base64Audio }));
             } catch (error) {
                 console.error("TTS streaming error:", error);
                 break;
             }
         }
-        
+
         this.isAISpeaking = false;
         if (!this.interrupted) {
             this.ws.send(JSON.stringify({ type: 'status', message: 'Idle' }));

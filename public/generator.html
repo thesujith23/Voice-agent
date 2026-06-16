@@ -53,7 +53,10 @@
 <body>
 
     <div class="sidebar">
-        <h2>Saved Agents</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 20px; border-bottom: 1px solid #34495e;">
+            <h2 style="padding: 0; border: none;">Saved Agents</h2>
+            <button onclick="showGenerator()" style="background: #2ecc71; color: white; border: none; border-radius: 50%; width: 30px; height: 30px; cursor: pointer; font-size: 1.2rem; display: flex; align-items: center; justify-content: center;" title="Create New Agent">+</button>
+        </div>
         <div class="agent-list" id="agentList">
             <!-- Dynamically populated -->
         </div>
@@ -62,20 +65,57 @@
     <div class="main">
         <h1>Voice Agent Generator</h1>
         
-        <div class="generator-panel">
+        <div class="generator-panel" id="generatorPanel">
             <h3>Generate New Agent</h3>
-            <div style="display: flex; gap: 10px;">
-                <input type="text" id="promptInput" placeholder="e.g. Create a customer support agent for an e-commerce company">
-                <button class="btn" id="generateBtn" onclick="generateAgent()">Generate Magic</button>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <input type="text" id="promptInput" placeholder="Role: e.g. Create an AI agent for a dental clinic" style="width: 100%;">
+                <textarea id="knowledgeInput" placeholder="Knowledge & Needs: e.g. Clinic opening times 9AM-5PM, available doctors: Dr. Smith, Dr. Jane" rows="3" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical;"></textarea>
+                <button class="btn" id="generateBtn" onclick="generateAgent()" style="width: fit-content;">Generate Magic</button>
             </div>
             <div id="loading">Generating agent configuration... Please wait...</div>
         </div>
 
         <div class="split-view" id="agentWorkspace">
-            <div class="config-panel">
-                <h3 id="currentAgentName">Agent Configuration</h3>
-                <textarea class="json-viewer" id="jsonViewer"></textarea>
-                <div class="actions">
+            <div class="config-panel" style="overflow: hidden; display: flex; flex-direction: column;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 id="currentAgentName" style="margin: 0;">Agent Configuration</h3>
+                </div>
+                
+                <div style="background: #e8f4f8; padding: 10px; border-radius: 4px; margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
+                    <span style="font-size: 1.2rem;">✨</span>
+                    <input type="text" id="aiEditPrompt" placeholder="Ask AI to change something (e.g. 'Make the greeting more energetic' or 'Change opening time to 10AM')" style="flex: 1; padding: 8px; border: 1px solid #bdc3c7; border-radius: 4px;">
+                    <button class="btn" id="magicEditBtn" onclick="magicEditAgent()" style="background: #9b59b6; padding: 8px 15px;">Magic Edit</button>
+                </div>
+                <div id="editLoading" style="display: none; color: #9b59b6; font-weight: bold; margin-bottom: 10px; font-size: 0.9rem;">Applying AI magic...</div>
+
+                <div id="visualEditor" style="flex: 1; overflow-y: auto; padding-right: 10px; display: flex; flex-direction: column; gap: 10px;">
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.9rem; color: #34495e;">Agent Name</label>
+                        <input type="text" id="editAgentName" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                    </div>
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.9rem; color: #34495e;">Description</label>
+                        <input type="text" id="editDescription" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                    </div>
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.9rem; color: #34495e;">Greeting Message</label>
+                        <textarea id="editGreeting" rows="2" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; resize: vertical;"></textarea>
+                    </div>
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.9rem; color: #34495e;">System Prompt & Persona</label>
+                        <textarea id="editSystemPrompt" rows="6" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; resize: vertical;"></textarea>
+                    </div>
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.9rem; color: #34495e;">Rules (One rule per line)</label>
+                        <textarea id="editRules" rows="5" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; resize: vertical;"></textarea>
+                    </div>
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.9rem; color: #34495e;">Closing Message</label>
+                        <input type="text" id="editClosingMessage" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                    </div>
+                </div>
+
+                <div class="actions" style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee;">
                     <button class="btn" onclick="saveConfiguration()">Save Changes</button>
                     <button class="btn btn-delete" onclick="deleteAgent()">Delete</button>
                 </div>
@@ -117,7 +157,8 @@
 
         async function generateAgent() {
             const prompt = document.getElementById('promptInput').value;
-            if (!prompt) return alert('Enter a prompt first!');
+            const knowledge = document.getElementById('knowledgeInput').value;
+            if (!prompt) return alert('Enter a role or description first!');
 
             document.getElementById('generateBtn').disabled = true;
             document.getElementById('loading').style.display = 'block';
@@ -126,13 +167,14 @@
                 const res = await fetch('/api/agents/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt })
+                    body: JSON.stringify({ prompt, knowledge })
                 });
                 
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
                 
                 document.getElementById('promptInput').value = '';
+                document.getElementById('knowledgeInput').value = '';
                 await fetchAgents();
                 loadAgent(data.id);
             } catch (err) {
@@ -143,6 +185,13 @@
             }
         }
 
+        function showGenerator() {
+            currentAgentId = null;
+            document.getElementById('generatorPanel').style.display = 'block';
+            document.getElementById('agentWorkspace').classList.remove('active');
+            fetchAgents(); // Clear active state in sidebar
+        }
+
         async function loadAgent(id) {
             currentAgentId = id;
             chatHistory = []; // Reset chat history on new load
@@ -150,12 +199,23 @@
             const res = await fetch(`/api/agents/${id}`);
             const agent = await res.json();
             
+            document.getElementById('generatorPanel').style.display = 'none';
             document.getElementById('agentWorkspace').classList.add('active');
             document.getElementById('currentAgentName').innerText = agent.agentName + " Configuration";
             
-            const agentData = { ...agent };
-            delete agentData.id; // Hide ID from editor
-            document.getElementById('jsonViewer').value = JSON.stringify(agentData, null, 4);
+            // Populate Visual Editor
+            document.getElementById('editAgentName').value = agent.agentName || '';
+            document.getElementById('editDescription').value = agent.description || '';
+            document.getElementById('editGreeting').value = agent.greeting || '';
+            document.getElementById('editSystemPrompt').value = agent.systemPrompt || '';
+            document.getElementById('editRules').value = (agent.rules || []).join('\n');
+            document.getElementById('editClosingMessage').value = agent.closingMessage || '';
+            
+            // Keep FAQs in memory so they aren't lost on save
+            window.currentAgentFaqs = agent.faqs || [];
+            
+            // Clear magic edit prompt
+            document.getElementById('aiEditPrompt').value = '';
             
             // Reset Chat UI
             const chatBox = document.getElementById('chatBox');
@@ -168,16 +228,63 @@
             fetchAgents(); // Update active state in sidebar
         }
 
+        async function magicEditAgent() {
+            if (!currentAgentId) return;
+            const prompt = document.getElementById('aiEditPrompt').value.trim();
+            if (!prompt) return alert('Enter an instruction for the AI first!');
+
+            const btn = document.getElementById('magicEditBtn');
+            const loader = document.getElementById('editLoading');
+            btn.disabled = true;
+            loader.style.display = 'block';
+
+            try {
+                const res = await fetch(`/api/agents/${currentAgentId}/edit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                
+                const updatedAgent = await res.json();
+                if (updatedAgent.error) throw new Error(updatedAgent.error);
+                
+                // Reload the agent data into the form
+                loadAgent(currentAgentId);
+                
+                // Show a success indication
+                btn.innerText = 'Success!';
+                btn.style.background = '#2ecc71';
+                setTimeout(() => {
+                    btn.innerText = 'Magic Edit';
+                    btn.style.background = '#9b59b6';
+                }, 2000);
+                
+            } catch (err) {
+                alert('Magic Edit failed: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                loader.style.display = 'none';
+            }
+        }
+
         async function saveConfiguration() {
             if (!currentAgentId) return;
             try {
-                const jsonStr = document.getElementById('jsonViewer').value;
-                const parsed = JSON.parse(jsonStr);
+                // Read from Visual Editor
+                const agentData = {
+                    agentName: document.getElementById('editAgentName').value,
+                    description: document.getElementById('editDescription').value,
+                    greeting: document.getElementById('editGreeting').value,
+                    systemPrompt: document.getElementById('editSystemPrompt').value,
+                    rules: document.getElementById('editRules').value.split('\n').filter(r => r.trim() !== ''),
+                    closingMessage: document.getElementById('editClosingMessage').value,
+                    faqs: window.currentAgentFaqs || []
+                };
                 
                 const res = await fetch(`/api/agents/${currentAgentId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(parsed)
+                    body: JSON.stringify(agentData)
                 });
                 
                 if (res.ok) {
@@ -187,7 +294,7 @@
                     alert('Failed to save.');
                 }
             } catch (e) {
-                alert('Invalid JSON! Please fix formatting before saving.');
+                alert('An error occurred while saving.');
             }
         }
 
@@ -199,6 +306,7 @@
             
             currentAgentId = null;
             document.getElementById('agentWorkspace').classList.remove('active');
+            showGenerator();
             fetchAgents();
         }
 
@@ -277,6 +385,12 @@
                 document.getElementById('callBtn').innerText = '☎️ End Call';
                 document.getElementById('callBtn').style.background = '#e74c3c';
 
+                // Clear the UI and history so it's a completely fresh call
+                document.getElementById('chatBox').innerHTML = '<div class="msg system">Starting hands-free call...</div>';
+                chatHistory = [];
+
+                // Recreate the audio object so it drops any old audio buffer
+                callAudio = new Audio();
                 // Initial silent play to unlock browser autoplay restrictions
                 callAudio.play().catch(() => {});
 
@@ -333,10 +447,13 @@
             if (callStream) {
                 callStream.getTracks().forEach(track => track.stop());
             }
-            if (audioContext) {
+            if (audioContext && audioContext.state !== 'closed') {
                 audioContext.close();
             }
-            callAudio.pause();
+            if (callAudio) {
+                callAudio.pause();
+                callAudio.src = '';
+            }
             clearTimeout(silenceTimer);
             
             document.getElementById('callBtn').innerText = '📞 Call';

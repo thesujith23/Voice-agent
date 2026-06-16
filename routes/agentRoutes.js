@@ -20,10 +20,10 @@ const router = express.Router();
 // 1. Generate new agent from prompt
 router.post('/generate', async (req, res) => {
     try {
-        const { prompt } = req.body;
+        const { prompt, knowledge } = req.body;
         if (!prompt) return res.status(400).json({ error: "Prompt is required" });
 
-        const agent = await AgentGenerator.generate(prompt);
+        const agent = await AgentGenerator.generate(prompt, knowledge);
         res.json(agent);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -63,6 +63,23 @@ router.delete('/:id', (req, res) => {
     const success = AgentStorage.deleteAgent(req.params.id);
     if (!success) return res.status(404).json({ error: "Agent not found" });
     res.json({ success: true });
+});
+
+// 6. Magic Edit Agent (AI Powered)
+router.post('/:id/edit', async (req, res) => {
+    try {
+        const { prompt } = req.body;
+        if (!prompt) return res.status(400).json({ error: "Edit prompt is required" });
+
+        const agent = AgentStorage.getAgent(req.params.id);
+        if (!agent) return res.status(404).json({ error: "Agent not found" });
+
+        const updatedAgent = await AgentGenerator.edit(agent, prompt);
+        res.json(updatedAgent);
+    } catch (error) {
+        console.error("Magic Edit Error:", error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // 6. Test Chat with Agent (Text-Based Playground)
