@@ -115,8 +115,8 @@ class LivekitAgent {
         }
         const rms = Math.sqrt(sumSquares / samples.length);
 
-        // Dynamic VAD threshold: lower threshold for normal speech, higher if AI is speaking
-        const VAD_THRESHOLD = this.isAiSpeaking ? 2000 : 800; 
+        // Dynamic VAD threshold: balanced to reject background noise but allow normal speaking volume
+        const VAD_THRESHOLD = this.isAiSpeaking ? 3000 : 1500; 
 
         if (rms > VAD_THRESHOLD) {
             if (!this.isSpeaking) {
