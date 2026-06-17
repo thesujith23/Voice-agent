@@ -13,6 +13,7 @@ const plivo = require('plivo');
 const app = express();
 const port = process.env.PORT || 3000;
 
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Important for Plivo webhooks
@@ -21,7 +22,6 @@ app.use(express.static('public'));
 const agentRoutes = require('./routes/agentRoutes');
 app.use('/api/agents', agentRoutes);
 
-const { createUserJoinCredentials } = require('./services/livekitVoiceAgent');
 
 // Ensure public/audio directory exists for Plivo to access TTS files
 const audioDir = path.join(__dirname, 'public', 'audio');
@@ -129,19 +129,6 @@ app.post('/api/start-call', async (req, res) => {
 });
 
 // ------------- BROWSER FRONTEND ENDPOINT ------------- //
-// ------------- LIVEKIT REAL-TIME VOICE ------------- //
-app.post('/api/livekit/join-agent', async (req, res) => {
-    try {
-        const { agentId, identity } = req.body;
-        if (!agentId) return res.status(400).json({ error: 'agentId is required' });
-
-        const credentials = await createUserJoinCredentials(agentId, identity);
-        res.json(credentials);
-    } catch (error) {
-        console.error('LiveKit join error:', error.message);
-        res.status(500).json({ error: error.message || 'Failed to join LiveKit room' });
-    }
-});
 
 // ------------- BROWSER FRONTEND ENDPOINT ------------- //
 app.post('/api/voice-chat', upload.single('audio'), async (req, res) => {

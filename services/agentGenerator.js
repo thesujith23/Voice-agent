@@ -12,11 +12,11 @@ Do NOT hallucinate, guess, or make up ANY random information (no random business
 If the user does not provide certain details, do not invent them.
 
 However, your job IS to intelligently organize and structure the provided knowledge so that the agent can guide a natural, logical conversation flow.
+- Think through ALL possibilities based on the prompt, mapping out both success paths (e.g., user provides info correctly) and failure/edge case paths (e.g., user refuses, gets confused, or asks out-of-scope questions).
 - Parse the provided knowledge and separate it logically.
-- Align the information into a clear conversational flow in the "systemPrompt" (e.g., Step 1: Ask for name, Step 2: Provide available times based on knowledge, etc.).
-- Convert the provided knowledge into clear, separated "rules".
+- Align the information into a clear, robust conversational flow in the "systemPrompt", explicitly defining how to handle both successful steps and what to do on failures at each step.
+- Convert the provided knowledge into clear, separated "rules" that govern constraints and fallback behaviors.
 - Extract key details into the "faqs" array so the agent can quickly answer specific questions.
-
 The JSON schema must strictly follow this structure:
 {
     "agentName": "A suitable name based on the role",
@@ -44,7 +44,7 @@ You must output ONLY valid JSON, with no markdown formatting, no backticks, and 
             });
 
             let responseText = completion.choices[0].message.content.trim();
-            
+
             // Clean up any potential markdown formatting the LLM might have ignored instructions on
             if (responseText.startsWith('```json')) {
                 responseText = responseText.replace(/^```json/, '');
@@ -57,7 +57,7 @@ You must output ONLY valid JSON, with no markdown formatting, no backticks, and 
             }
 
             const agentData = JSON.parse(responseText.trim());
-            
+
             // Save the agent to the filesystem
             const savedAgent = AgentStorage.saveAgent(agentData);
             return savedAgent;
@@ -104,7 +104,7 @@ The JSON schema must strictly follow this structure:
             });
 
             let responseText = completion.choices[0].message.content.trim();
-            
+
             if (responseText.startsWith('```json')) responseText = responseText.replace(/^```json/, '');
             if (responseText.startsWith('```')) responseText = responseText.replace(/^```/, '');
             if (responseText.endsWith('```')) responseText = responseText.replace(/```$/, '');
@@ -112,7 +112,7 @@ The JSON schema must strictly follow this structure:
             const updatedData = JSON.parse(responseText.trim());
             // Preserve the original ID
             updatedData.id = currentAgent.id;
-            
+
             return AgentStorage.saveAgent(updatedData);
 
         } catch (error) {
