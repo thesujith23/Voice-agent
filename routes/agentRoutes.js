@@ -8,6 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const FormData = require('form-data');
 const axios = require('axios');
+const { AccessToken } = require('livekit-server-sdk');
+const LivekitAgent = require('../services/livekitService');
 
 const uploadDir = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -181,6 +183,42 @@ router.get('/:id/greeting', async (req, res) => {
     } catch (error) {
         console.error("Greeting Error:", error.response ? error.response.data : error.message);
         res.status(500).json({ error: "Failed to generate greeting" });
+    }
+});
+
+// 7. Generate LiveKit Token & Start Agent
+router.post('/:id/livekit', async (req, res) => {
+    try {
+        const agentId = req.params.id;
+        const agent = AgentStorage.getAgent(agentId);
+        if (!agent) return res.status(404).json({ error: "Agent not found" });
+
+        const roomName = `room-${agentId}-${Date.now()}`;
+        const participantName = `User-${Math.floor(Math.random() * 1000)}`;
+
+        const at = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
+            identity: participantName,
+            name: participantName,
+        });
+
+        at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
+        const userToken = await at.toJwt();
+
+        const agentTokenGen = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
+            identity: 'AI-Agent',
+            name: 'AI Agent',
+        });
+        agentTokenGen.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
+        const aiToken = await agentTokenGen.toJwt();
+
+        // Start backend agent worker
+        const aiAgent = new LivekitAgent(process.env.LIVEKIT_URL, aiToken, agentId, roomName);
+        aiAgent.start().catch(e => console.error("Agent failed to start:", e));
+
+        res.json({ token: userToken, room: roomName, url: process.env.LIVEKIT_URL });
+    } catch (error) {
+        console.error("LiveKit Token Error:", error);
+        res.status(500).json({ error: "Failed to generate LiveKit token" });
     }
 });
 
