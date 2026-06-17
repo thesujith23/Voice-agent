@@ -21,6 +21,8 @@ app.use(express.static('public'));
 const agentRoutes = require('./routes/agentRoutes');
 app.use('/api/agents', agentRoutes);
 
+const { createUserJoinCredentials } = require('./services/livekitVoiceAgent');
+
 // Ensure public/audio directory exists for Plivo to access TTS files
 const audioDir = path.join(__dirname, 'public', 'audio');
 if (!fs.existsSync(audioDir)) {
@@ -123,6 +125,21 @@ app.post('/api/start-call', async (req, res) => {
     } catch (error) {
         console.error("Error generating greeting:", error.message);
         res.status(500).json({ error: "Failed to generate greeting" });
+    }
+});
+
+// ------------- BROWSER FRONTEND ENDPOINT ------------- //
+// ------------- LIVEKIT REAL-TIME VOICE ------------- //
+app.post('/api/livekit/join-agent', async (req, res) => {
+    try {
+        const { agentId, identity } = req.body;
+        if (!agentId) return res.status(400).json({ error: 'agentId is required' });
+
+        const credentials = await createUserJoinCredentials(agentId, identity);
+        res.json(credentials);
+    } catch (error) {
+        console.error('LiveKit join error:', error.message);
+        res.status(500).json({ error: error.message || 'Failed to join LiveKit room' });
     }
 });
 

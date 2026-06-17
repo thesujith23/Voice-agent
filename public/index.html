@@ -49,6 +49,7 @@
         .btn-delete { background: #e74c3c; }
         .btn-delete:hover { background: #c0392b; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
 </head>
 <body>
 
@@ -358,20 +359,13 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
-        // Hands-Free Call Logic (HTTP-Based)
+        // Hands-Free Call Logic (LiveKit Real-Time Streaming)
         let isCalling = false;
-        let callStream = null;
-        let callMediaRecorder = null;
-        let callAudioChunks = [];
-        let callAudio = new Audio();
-        let audioContext;
-        let analyser;
-        let silenceTimer;
-        let isUserSpeaking = false;
+        let livekitRoom = null;
+        let agentAudioEl = null;
 
         async function toggleCall() {
             if (!currentAgentId) return alert('Please select or generate an agent first.');
-            
             if (isCalling) {
                 stopCall();
             } else {
@@ -385,210 +379,116 @@
                 document.getElementById('callBtn').innerText = '☎️ End Call';
                 document.getElementById('callBtn').style.background = '#e74c3c';
 
-                // Clear the UI and history so it's a completely fresh call
-                document.getElementById('chatBox').innerHTML = '<div class="msg system">Starting hands-free call...</div>';
+                document.getElementById('chatBox').innerHTML = '<div class="msg system">Connecting to LiveKit...</div>';
                 chatHistory = [];
 
-                // Recreate the audio object so it drops any old audio buffer
-                callAudio = new Audio();
-                // Initial silent play to unlock browser autoplay restrictions
-                callAudio.play().catch(() => {});
-
-                callStream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { echoCancellation: true, noiseSuppression: true } 
+                const res = await fetch('/api/livekit/join-agent', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ agentId: currentAgentId })
                 });
-                
-                // Set up AudioContext for client-side Silence Detection
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioContext.createAnalyser();
-                analyser.minDecibels = -60;
-                const microphone = audioContext.createMediaStreamSource(callStream);
-                microphone.connect(analyser);
 
-                // Fetch initial greeting first
-                const res = await fetch(`/api/agents/${currentAgentId}/greeting`);
                 const data = await res.json();
-                
                 if (data.error) throw new Error(data.error);
-                
-                chatHistory = data.history;
-                addChatMessage(data.greetingText, 'ai');
-                
-                if (data.audioBase64) {
-                    callAudio.src = "data:audio/wav;base64," + data.audioBase64;
-                    
-                    const speakingDiv = document.createElement('div');
-                    speakingDiv.className = 'msg system temp-msg';
-                    speakingDiv.innerText = 'AI is speaking...';
-                    const chatBox = document.getElementById('chatBox');
-                    chatBox.appendChild(speakingDiv);
-                    chatBox.scrollTop = chatBox.scrollHeight;
 
-                    callAudio.onended = () => {
-                        document.querySelectorAll('.temp-msg').forEach(e => e.remove());
-                        if (isCalling) startListeningTurn();
-                    };
-                    await callAudio.play();
-                } else {
-                    if (isCalling) startListeningTurn();
+                const { Room, RoomEvent, Track } = LivekitClient;
+                livekitRoom = new Room({ adaptiveStream: true, dynacast: true });
+
+                livekitRoom.on(RoomEvent.DataReceived, (payload) => {
+                    try {
+                        const msg = JSON.parse(new TextDecoder().decode(payload));
+                        handleAgentData(msg);
+                    } catch (e) { /* ignore non-JSON data */ }
+                });
+
+                livekitRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                    if (track.kind === Track.Kind.Audio && participant.identity === 'voice-agent-bot') {
+                        if (agentAudioEl) {
+                            agentAudioEl.remove();
+                        }
+                        agentAudioEl = track.attach();
+                        agentAudioEl.play().catch(() => {});
+                    }
+                });
+
+                livekitRoom.on(RoomEvent.Disconnected, () => {
+                    if (isCalling) {
+                        addChatMessage('Call disconnected.', 'system');
+                        stopCall();
+                    }
+                });
+
+                await livekitRoom.connect(data.url, data.token);
+                await livekitRoom.localParticipant.setMicrophoneEnabled(true);
+
+                document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+                addChatMessage('Connected to ' + (data.agentName || 'agent') + ' via LiveKit.', 'system');
+
+                if (data.greeting) {
+                    addChatMessage(data.greeting, 'ai');
                 }
-                
+
+                showCallStatus('Listening... (Speak now)');
+
             } catch (err) {
-                alert('Connection or Microphone error: ' + err.message);
+                alert('LiveKit connection error: ' + err.message);
                 stopCall();
             }
         }
 
+        function handleAgentData(msg) {
+            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+
+            if (msg.type === 'transcript') {
+                addChatMessage(msg.text, 'user');
+            } else if (msg.type === 'aiText') {
+                addChatMessage(msg.text, 'ai');
+            } else if (msg.type === 'status') {
+                if (msg.message === 'Idle') {
+                    showCallStatus('Listening... (Speak now)');
+                } else if (msg.message === 'Speaking...') {
+                    showCallStatus('AI is speaking...');
+                } else {
+                    showCallStatus(msg.message);
+                }
+            } else if (msg.type === 'interrupt') {
+                if (agentAudioEl) {
+                    agentAudioEl.pause();
+                    agentAudioEl.currentTime = 0;
+                }
+                showCallStatus('Listening... (Speak now)');
+            } else if (msg.type === 'error') {
+                addChatMessage('Error: ' + msg.message, 'system');
+            }
+        }
+
+        function showCallStatus(text) {
+            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
+            const tempDiv = document.createElement('div');
+            tempDiv.className = 'msg system temp-msg';
+            tempDiv.innerText = text;
+            const chatBox = document.getElementById('chatBox');
+            chatBox.appendChild(tempDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
         function stopCall() {
             isCalling = false;
-            if (callMediaRecorder && callMediaRecorder.state === 'recording') {
-                callMediaRecorder.stop();
+
+            if (livekitRoom) {
+                livekitRoom.disconnect();
+                livekitRoom = null;
             }
-            if (callStream) {
-                callStream.getTracks().forEach(track => track.stop());
+
+            if (agentAudioEl) {
+                agentAudioEl.pause();
+                agentAudioEl.remove();
+                agentAudioEl = null;
             }
-            if (audioContext && audioContext.state !== 'closed') {
-                audioContext.close();
-            }
-            if (callAudio) {
-                callAudio.pause();
-                callAudio.src = '';
-            }
-            clearTimeout(silenceTimer);
-            
+
             document.getElementById('callBtn').innerText = '📞 Call';
             document.getElementById('callBtn').style.background = '#27ae60';
             document.querySelectorAll('.temp-msg').forEach(e => e.remove());
-        }
-
-        function startListeningTurn() {
-            if (!isCalling) return;
-
-            callAudioChunks = [];
-            callMediaRecorder = new MediaRecorder(callStream, { mimeType: 'audio/webm' });
-            
-            callMediaRecorder.ondataavailable = e => {
-                if (e.data.size > 0) callAudioChunks.push(e.data);
-            };
-
-            callMediaRecorder.onstop = async () => {
-                if (!isCalling) return;
-                const audioBlob = new Blob(callAudioChunks, { type: 'audio/webm' });
-                await sendCallTurn(audioBlob);
-            };
-
-            callMediaRecorder.start();
-            isUserSpeaking = false;
-            
-            // If they are absolutely quiet for 10 seconds, end the turn to avoid huge files
-            clearTimeout(silenceTimer);
-            silenceTimer = setTimeout(() => {
-                if (!isUserSpeaking && callMediaRecorder.state === 'recording') {
-                    callMediaRecorder.stop();
-                }
-            }, 10000);
-
-            monitorSilence();
-            
-            // Show UI indicator
-            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
-            const tempDiv = document.createElement('div');
-            tempDiv.className = 'msg system temp-msg';
-            tempDiv.innerText = 'Listening... (Speak now)';
-            const chatBox = document.getElementById('chatBox');
-            chatBox.appendChild(tempDiv);
-            chatBox.scrollTop = chatBox.scrollHeight;
-        }
-
-        function monitorSilence() {
-            if (!isCalling || callMediaRecorder.state !== 'recording') return;
-
-            const bufferLength = analyser.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
-            analyser.getByteFrequencyData(dataArray);
-
-            let sum = 0;
-            for (let i = 0; i < bufferLength; i++) {
-                sum += dataArray[i];
-            }
-            const averageVolume = sum / bufferLength;
-
-            if (averageVolume > 25) { // Threshold for speech (raised to ignore background noise/fans)
-                isUserSpeaking = true;
-                clearTimeout(silenceTimer);
-                
-                // Once speaking, wait for 1.2 seconds of silence to end the turn
-                silenceTimer = setTimeout(() => {
-                    if (callMediaRecorder.state === 'recording') {
-                        callMediaRecorder.stop();
-                    }
-                }, 1200);
-            }
-
-            requestAnimationFrame(monitorSilence);
-        }
-
-        async function sendCallTurn(audioBlob) {
-            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
-
-            const tempDiv = document.createElement('div');
-            tempDiv.className = 'msg system temp-msg';
-            tempDiv.innerText = 'Thinking...';
-            const chatBox = document.getElementById('chatBox');
-            chatBox.appendChild(tempDiv);
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            try {
-                const formData = new FormData();
-                formData.append('audio', audioBlob);
-                formData.append('history', JSON.stringify(chatHistory));
-
-                const res = await fetch(`/api/agents/${currentAgentId}/voice-chat`, {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await res.json();
-                if (data.error) throw new Error(data.error);
-
-                document.querySelectorAll('.temp-msg').forEach(e => e.remove());
-
-                // Ignore if STT returns empty or silence bracket
-                const isSilence = !data.userText || data.userText.trim() === '' || data.userText.includes('[Silence]');
-
-                if (!isSilence) {
-                    addChatMessage(data.userText, 'user');
-                    addChatMessage(data.response, 'ai');
-                    chatHistory = data.history;
-
-                    if (data.audioBase64 && isCalling) {
-                        callAudio.src = "data:audio/wav;base64," + data.audioBase64;
-                        
-                        // Show "Speaking..." indicator
-                        const speakingDiv = document.createElement('div');
-                        speakingDiv.className = 'msg system temp-msg';
-                        speakingDiv.innerText = 'AI is speaking...';
-                        chatBox.appendChild(speakingDiv);
-                        chatBox.scrollTop = chatBox.scrollHeight;
-
-                        callAudio.onended = () => {
-                            document.querySelectorAll('.temp-msg').forEach(e => e.remove());
-                            if (isCalling) startListeningTurn();
-                        };
-                        await callAudio.play();
-                    } else {
-                        if (isCalling) startListeningTurn();
-                    }
-                } else {
-                    // It was just background noise, restart listening loop without changing history
-                    if (isCalling) startListeningTurn();
-                }
-
-            } catch (err) {
-                document.querySelectorAll('.temp-msg').forEach(e => e.remove());
-                addChatMessage('Error: ' + err.message, 'system');
-                if (isCalling) setTimeout(() => startListeningTurn(), 2000); // Wait 2s and try again
-            }
         }
 
         // Initial Load

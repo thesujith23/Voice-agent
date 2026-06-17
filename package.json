@@ -12,6 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@livekit/rtc-node": "^0.13.29",
     "@supabase/supabase-js": "^2.108.1",
     "axios": "^1.17.0",
     "cors": "^2.8.6",
