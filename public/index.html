@@ -47,8 +47,12 @@
         
         .actions { margin-top: 10px; display: flex; gap: 10px; justify-content: flex-end;}
         .btn-delete { background: #e74c3c; }
+        .btn-delete { background: #e74c3c; }
         .btn-delete:hover { background: #c0392b; }
     </style>
+    
+    <!-- LiveKit Client SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
 
 </head>
 <body>
@@ -359,153 +363,20 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
-        // Hands-Free Call Logic (HTTP & MediaRecorder)
-        let mediaRecorder;
-        let audioChunks = [];
-        let isRecording = false;
+        // Hands-Free Call Logic (LiveKit WebRTC)
+        let currentRoom = null;
         let isCalling = false;
-
-        let audioContext;
-        let analyser;
-        let silenceTimer = null;
-        let animationFrameId = null;
-        const SILENCE_DELAY = 1200; // Reduced from 2500ms to 1200ms so it responds faster
 
         async function toggleCall() {
             if (!currentAgentId) return alert('Please select or generate an agent first.');
             if (isCalling) {
-                stopCall();
+                await stopCall();
             } else {
-                startCall();
+                await startCall();
             }
-        }
-
-        async function initAudio() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream);
-
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const source = audioContext.createMediaStreamSource(stream);
-                analyser = audioContext.createAnalyser();
-                source.connect(analyser);
-
-                mediaRecorder.ondataavailable = event => {
-                    if (event.data.size > 0) audioChunks.push(event.data);
-                };
-
-                mediaRecorder.onstop = async () => {
-                    if (!isCalling) return;
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                    audioChunks = [];
-                    await sendAudioToServer(audioBlob);
-                };
-            } catch (err) {
-                console.error("Microphone access denied:", err);
-                showCallStatus("Error: Microphone access denied");
-            }
-        }
-
-        function detectSilence() {
-            if (!isRecording) return;
-
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            analyser.getByteTimeDomainData(dataArray);
-
-            let isSpeaking = false;
-            for (let i = 0; i < dataArray.length; i++) {
-                let amplitude = Math.abs(dataArray[i] - 128);
-                if (amplitude > 15) { // Increased from 3 to 15 to ignore background noise
-                    isSpeaking = true;
-                    break;
-                }
-            }
-
-            if (isSpeaking) {
-                if (silenceTimer) {
-                    clearTimeout(silenceTimer);
-                    silenceTimer = null;
-                }
-                showCallStatus("Listening...");
-            } else {
-                if (!silenceTimer) {
-                    silenceTimer = setTimeout(() => {
-                        if (isRecording) stopRecording();
-                    }, SILENCE_DELAY);
-                }
-            }
-
-            animationFrameId = requestAnimationFrame(detectSilence);
-        }
-
-        function startRecording() {
-            if (!mediaRecorder || isRecording || !isCalling) return;
-            audioChunks = [];
-            mediaRecorder.start();
-            isRecording = true;
-            showCallStatus("Listening... (Speak now)");
-            document.getElementById('callBtn').innerText = '☎️ End Call';
-            document.getElementById('callBtn').style.background = '#e74c3c';
-            
-            if (audioContext.state === 'suspended') audioContext.resume();
-            detectSilence();
-        }
-
-        function stopRecording() {
-            if (!mediaRecorder || !isRecording) return;
-            isRecording = false;
-            mediaRecorder.stop();
-            if (silenceTimer) clearTimeout(silenceTimer);
-            if (animationFrameId) cancelAnimationFrame(animationFrameId);
-        }
-
-        async function sendAudioToServer(blob) {
-            showCallStatus("Thinking...");
-            
-            const formData = new FormData();
-            formData.append('audio', blob, 'recording.webm');
-            formData.append('history', JSON.stringify(chatHistory));
-
-            try {
-                const response = await fetch(`/api/agents/${currentAgentId}/voice-chat`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-                
-                if (data.error) throw new Error(data.error);
-
-                if (data.userText !== "[Silence]") addChatMessage(data.userText, 'user');
-                if (data.response) addChatMessage(data.response, 'ai');
-                
-                chatHistory = data.history || chatHistory;
-
-                if (data.audioBase64) {
-                    playAudio("data:audio/wav;base64," + data.audioBase64);
-                } else {
-                    startRecording();
-                }
-            } catch (error) {
-                showCallStatus("Error: Failed to process request.");
-                stopCall();
-            }
-        }
-
-        function playAudio(src) {
-            if (!isCalling) return;
-            const audio = new Audio(src);
-            showCallStatus("AI is speaking...");
-            audio.play();
-            audio.onended = () => {
-                if (isCalling) startRecording();
-            };
         }
 
         async function startCall() {
-            if (!mediaRecorder) await initAudio();
-            if (!mediaRecorder) return;
-            
             document.getElementById('chatBox').innerHTML = '';
             isCalling = true;
             document.getElementById('callBtn').innerText = 'Connecting...';
@@ -513,30 +384,72 @@
             chatHistory = [];
 
             try {
-                const response = await fetch(`/api/agents/${currentAgentId}/greeting`);
+                // 1. Get Token from backend
+                const response = await fetch(`/api/agents/${currentAgentId}/livekit`, { method: 'POST' });
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);
 
-                chatHistory = data.history || [];
-                addChatMessage(data.greetingText, 'ai');
+                // 2. Connect to LiveKit Room
+                currentRoom = new LivekitClient.Room({
+                    adaptiveStream: true,
+                    dynacast: true,
+                    audioCaptureDefaults: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                    },
+                    videoCaptureDefaults: { resolution: LivekitClient.VideoPresets.h720.resolution },
+                });
+
+                // Listen for data messages (transcripts/status) from AI
+                currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, kind, topic) => {
+                    const strData = new TextDecoder().decode(payload);
+                    try {
+                        const msg = JSON.parse(strData);
+                        if (msg.type === 'status') {
+                            showCallStatus(msg.text);
+                        } else if (msg.type === 'transcript') {
+                            addChatMessage(msg.text, 'user');
+                        } else if (msg.type === 'aiText') {
+                            addChatMessage(msg.text, 'ai');
+                        }
+                    } catch (e) {}
+                });
+
+                currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                    if (track.kind === LivekitClient.Track.Kind.Audio) {
+                        const audioElement = track.attach();
+                        document.body.appendChild(audioElement);
+                    }
+                });
+
+                currentRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
+                    stopCall();
+                });
+
+                await currentRoom.connect(data.url, data.token);
                 
-                if (data.audioBase64) {
-                    playAudio("data:audio/wav;base64," + data.audioBase64);
-                    document.getElementById('callBtn').innerText = '☎️ End Call';
-                    document.getElementById('callBtn').style.background = '#e74c3c';
-                } else {
-                    startRecording();
-                }
+                // 3. Publish Microphone
+                await currentRoom.localParticipant.setMicrophoneEnabled(true);
+
+                document.getElementById('callBtn').innerText = '☎️ End Call';
+                document.getElementById('callBtn').style.background = '#e74c3c';
+                showCallStatus("Connected! Say hello.");
+
             } catch (error) {
                 showCallStatus("Failed to start call");
-                stopCall();
+                console.error(error);
+                await stopCall();
             }
         }
 
-        function stopCall() {
+        async function stopCall() {
             isCalling = false;
-            if (isRecording) stopRecording();
+            
+            if (currentRoom) {
+                await currentRoom.disconnect();
+                currentRoom = null;
+            }
             
             document.getElementById('callBtn').innerText = '📞 Call';
             document.getElementById('callBtn').style.background = '#27ae60';
