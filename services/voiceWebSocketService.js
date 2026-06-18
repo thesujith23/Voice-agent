@@ -29,7 +29,7 @@ class SarvamTTSProvider {
         try {
             const ttsBody = {
                 inputs: [text],
-                target_language_code: "hi-IN",
+                target_language_code: process.env.TTS_LANGUAGE_CODE || "en-IN",
                 speaker: "shreya",
                 pace: 1.0,
                 speech_sample_rate: 8000,

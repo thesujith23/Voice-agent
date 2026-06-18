@@ -246,6 +246,7 @@ class LivekitAgent {
         this.isAiSpeaking = true;
         this.abortController = new AbortController();
         const signal = this.abortController.signal;
+        const languageCode = process.env.TTS_LANGUAGE_CODE || "en-IN";
 
         try {
             await this.sendRoomData('status', 'Speaking...');
@@ -257,7 +258,7 @@ class LivekitAgent {
             const ttsPromises = sentences.filter(s => s.trim().length > 0).map(async sentence => {
                 const ttsBody = {
                     inputs: [sentence.trim()],
-                    target_language_code: "hi-IN",
+                    target_language_code: "en-IN",
                     speaker: "shreya",
                     pace: 1.0,
                     speech_sample_rate: 8000,

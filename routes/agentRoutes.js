@@ -149,7 +149,7 @@ router.get('/:id/greeting', async (req, res) => {
         const sarvamApiKey = process.env.SARVAM_API_KEY;
         const ttsBody = {
             inputs: [greeting],
-            target_language_code: "hi-IN",
+            target_language_code: (process.env.TTS_LANGUAGE_CODE || "en-IN"),
             speaker: "shreya",
             pace: 1.0,
             speech_sample_rate: 8000,
@@ -294,7 +294,7 @@ router.post('/:id/voice-chat', upload.single('audio'), async (req, res) => {
         // 3. TTS via Sarvam
         const ttsBody = {
             inputs: [aiResponse],
-            target_language_code: "hi-IN",
+            target_language_code: (process.env.TTS_LANGUAGE_CODE || "en-IN"),
             speaker: "shreya",
             pace: 1.0,
             speech_sample_rate: 8000,
