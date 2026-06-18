@@ -53,6 +53,7 @@ class VoiceActivityDetector {
         this.onSpeechStart = onSpeechStart;
         this.onSpeechEnd = onSpeechEnd;
         this.silenceThreshold = parseInt(process.env.VAD_SILENCE_THRESHOLD) || 1000;
+        this.loudChunkMinBytes = parseInt(process.env.VAD_LOUD_CHUNK_BYTES) || 1500;
         this.silenceTimer = null;
         this.isSpeaking = false;
         this.audioBuffer = [];
@@ -67,8 +68,8 @@ class VoiceActivityDetector {
 
         this.audioBuffer.push(chunk);
 
-        // Consider chunk loud if it's > 1500 bytes (filters out WebM silence chunks)
-        const isLoud = chunk.length > 1500;
+        // Consider chunk loud if it's above the byte threshold (filters out WebM silence chunks)
+        const isLoud = chunk.length > this.loudChunkMinBytes;
 
         if (isLoud) {
             if (!this.isSpeaking) {
@@ -200,14 +201,18 @@ class VoiceSessionManager {
     }
 
     handleSpeechStart(chunkLength) {
-        // Absolute Echo Prevention:
-        if (this.isAISpeaking) {
+        // Speech threshold: ignore chunks below this size (filters noise/ambient)
+        const SPEECH_THRESHOLD = parseInt(process.env.WS_SPEECH_THRESHOLD) || 1500;
+        if (chunkLength < SPEECH_THRESHOLD) {
             return false;
         }
 
-        // If AI is quiet, normal speech (>1500 bytes) triggers speech detection.
-        if (chunkLength < 1500) {
-            return false; 
+        // If AI is speaking, interrupt it immediately
+        if (this.isAISpeaking) {
+            console.log(`[WS Session ${this.sessionId}] User interrupted AI`);
+            this.interrupted = true;
+            if (this.abortController) this.abortController.abort();
+            this.isAISpeaking = false;
         }
 
         console.log(`[WS Session ${this.sessionId}] User started speaking (chunk: ${chunkLength} bytes)`);

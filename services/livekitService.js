@@ -115,20 +115,31 @@ class LivekitAgent {
         }
         const rms = Math.sqrt(sumSquares / samples.length);
 
+        // Noise gate: ignore sounds below normal conversation level (~40dB = RMS ~100)
+        const NOISE_FLOOR_DB = parseInt(process.env.NOISE_FLOOR_DB) || 40;
+        const rmsDb = 20 * Math.log10(Math.max(rms, 1));
+        if (rmsDb < NOISE_FLOOR_DB) {
+            if (this.isSpeaking) {
+                this.audioBuffer.push(new Int16Array(samples));
+            }
+            return;
+        }
+
         // Dynamic VAD threshold: balanced to reject background noise but allow normal speaking volume
         const VAD_THRESHOLD = this.isAiSpeaking ? 3000 : 1500; 
 
         if (rms > VAD_THRESHOLD) {
             if (!this.isSpeaking) {
-                console.log("User started speaking");
+                console.log("User started speaking (RMS: " + rms.toFixed(0) + ", dB: " + rmsDb.toFixed(1) + ")");
                 this.isSpeaking = true;
                 
                 // Interrupt AI if it's currently speaking
                 if (this.isAiSpeaking) {
-                    console.log("Interrupting AI");
+                    console.log("Interrupting AI — draining audio queue");
                     this.interrupted = true;
                     if (this.abortController) this.abortController.abort();
                     this.isAiSpeaking = false;
+                    this.audioSource.clearQueue();
                 }
             }
             clearTimeout(this.silenceTimer);
@@ -265,12 +276,18 @@ class LivekitAgent {
 
             // Process and play them in order as they resolve
             for (const promise of ttsPromises) {
-                if (signal.aborted || this.interrupted) break;
+                if (signal.aborted || this.interrupted) {
+                    this.audioSource.clearQueue();
+                    break;
+                }
                 
                 const response = await promise;
                 if (response.error) throw response.error;
                 
-                if (signal.aborted || this.interrupted) break;
+                if (signal.aborted || this.interrupted) {
+                    this.audioSource.clearQueue();
+                    break;
+                }
 
                 const base64Audio = response.data.audios[0];
                 const audioBuffer = Buffer.from(base64Audio, 'base64');
@@ -280,7 +297,10 @@ class LivekitAgent {
                 wav.toSampleRate(8000);
                 const samples = wav.getSamples(false, Int16Array); 
 
-                if (signal.aborted || this.interrupted) break;
+                if (signal.aborted || this.interrupted) {
+                    this.audioSource.clearQueue();
+                    break;
+                }
 
                 // Send to LiveKit AudioSource
                 const frame = new AudioFrame(new Int16Array(samples), 8000, 1, samples.length);
@@ -294,6 +314,7 @@ class LivekitAgent {
             }
         } finally {
             this.isAiSpeaking = false;
+            if (this.interrupted) this.audioSource.clearQueue();
             if (!this.interrupted) await this.sendRoomData('status', 'Idle');
         }
     }
